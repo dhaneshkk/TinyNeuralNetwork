@@ -1295,7 +1295,7 @@ class ATenSubOperator(ATenSubSchema):
         if type(other) in (int, float, bool):
             self.input_tensors[1] = torch.tensor([other], dtype=self.input_tensors[0].dtype)
         elif not isinstance(other, torch.Tensor):
-            assert False, "other should have type int, float, tensor in aten::sub(input, other)"
+            raise AssertionError("other should have type int, float, tensor in aten::sub(input, other)")
 
         self.elementwise_binary(tfl.SubOperator, graph_converter, True)
 
@@ -1313,7 +1313,7 @@ class ATenRsubOperator(ATenRsubSchema):
         if type(other) in (int, float, bool):
             self.input_tensors[1] = torch.tensor([other], dtype=self.input_tensors[0].dtype)
         elif not isinstance(other, torch.Tensor):
-            assert False, "other should have type int, float, tensor in aten::rsub(input, other)"
+            raise AssertionError("other should have type int, float, tensor in aten::rsub(input, other)")
 
         # Swap the first two input tensors and their names
         self.input_names[0], self.input_names[1] = self.input_names[1], self.input_names[0]
@@ -1351,7 +1351,7 @@ class ATenMulOperator(ATenMulSchema):
         if type(other) in (int, float):
             self.input_tensors[1] = torch.tensor([other], dtype=self.input_tensors[0].dtype)
         elif not isinstance(other, torch.Tensor):
-            assert False, "other should have type int, float, tensor in aten::mul(input, other)"
+            raise AssertionError("other should have type int, float, tensor in aten::mul(input, other)")
 
         self.elementwise_binary(tfl.MulOperator, graph_converter, True)
 
@@ -1421,7 +1421,7 @@ class ATenDivOperator(ATenDivSchema):
         if type(other) in (int, float):
             self.input_tensors[1] = torch.tensor([other], dtype=self.input_tensors[0].dtype)
         elif not isinstance(other, torch.Tensor):
-            assert False, "other should have type int, float, tensor in aten::div(input, other)"
+            raise AssertionError("other should have type int, float, tensor in aten::div(input, other)")
 
         self.elementwise_binary(tfl.DivOperator, graph_converter, True)
 
@@ -2146,7 +2146,7 @@ class ATenAddOperator(ATenAddSchema):
         if type(other) in (int, float, bool):
             self.input_tensors[1] = torch.tensor([other], dtype=self.input_tensors[0].dtype)
         elif not isinstance(other, torch.Tensor):
-            assert False, "other should have type int, float, tensor in aten::add(input, other)"
+            raise AssertionError("other should have type int, float, tensor in aten::add(input, other)")
 
         self.elementwise_binary(tfl.AddOperator, graph_converter, True)
 
@@ -3993,7 +3993,7 @@ class ATenMaskedFillOperator(ATenMaskedFillSchema):
                 other_a = np.clip(other_a, type_info.min, type_info.max)
             other_t = self.create_attr_tensor(other_a)
         else:
-            assert False, "value should have type float, tensor in aten::masked_fill(input, mask, value)"
+            raise AssertionError("value should have type float, tensor in aten::masked_fill(input, mask, value)")
 
         if mask_tensor.buffer is None:
             input_mask = self.create_transform_tensor(mask_tensor.tensor.astype(input_tensor.dtype))
@@ -4169,7 +4169,7 @@ class ATenMeshgridOperator(ATenMeshgridSchema):
         super().parse(node, attrs, args, graph_converter)
 
         self.run(node)
-        assert False, "aten::meshgrid for dynamic tensors is not supported"
+        raise AssertionError("aten::meshgrid for dynamic tensors is not supported")
 
 
 class ATenFillOperator(ATenFillSchema):
@@ -4177,7 +4177,7 @@ class ATenFillOperator(ATenFillSchema):
         super().parse(node, attrs, args, graph_converter)
 
         self.run(node)
-        assert False, "aten::fill_ for dynamic tensors is not supported"
+        raise AssertionError("aten::fill_ for dynamic tensors is not supported")
 
 
 class ATenUnbindOperator(ATenUnbindSchema):

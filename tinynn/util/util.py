@@ -1,5 +1,8 @@
+import ast
 import importlib.util
+import inspect
 import logging
+import math
 import os
 import sys
 import types
@@ -245,6 +248,91 @@ def import_from_path(module: str, path: str, name: str):
     spec.loader.exec_module(foo)
     sys.modules[module] = foo
     return getattr(foo, name)
+
+
+def safe_torch_load(path, map_location=None):
+    """`torch.load` restricted to tensors and plain containers (state dicts).
+
+    Uses `weights_only=True` whenever the installed PyTorch supports it (>= 1.13), so loading a
+    checkpoint cannot execute arbitrary pickled code. All TinyNN-internal checkpoints are state dicts.
+    """
+    import torch
+
+    kwargs = {}
+    if 'weights_only' in inspect.signature(torch.load).parameters:
+        kwargs['weights_only'] = True
+    return torch.load(path, map_location=map_location, **kwargs)
+
+
+_SAFE_ARG_NAMES = {'inf': math.inf, 'nan': math.nan, 'True': True, 'False': False, 'None': None}
+
+
+def _eval_arg_node(node):
+    """Evaluates one argument node of a traced call without `eval`.
+
+    Accepts Python literals plus the few non-literal forms that appear in traced argument strings:
+    `inf`/`nan`, `float('inf')`-style casts, negation, containers of those, and `torch.<attr>` chains
+    (e.g. `torch.float32`). Anything else (tensor names, arbitrary calls) raises `ValueError`.
+    """
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        pass
+
+    if isinstance(node, ast.Name) and node.id in _SAFE_ARG_NAMES:
+        return _SAFE_ARG_NAMES[node.id]
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        val = _eval_arg_node(node.operand)
+        return -val if isinstance(node.op, ast.USub) else +val
+    if isinstance(node, (ast.Tuple, ast.List)):
+        vals = [_eval_arg_node(e) for e in node.elts]
+        return tuple(vals) if isinstance(node, ast.Tuple) else vals
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ('float', 'int', 'bool')
+        and not node.keywords
+        and len(node.args) <= 1
+    ):
+        cast = {'float': float, 'int': int, 'bool': bool}[node.func.id]
+        return cast(*[_eval_arg_node(a) for a in node.args])
+    if isinstance(node, ast.Attribute):
+        parts = []
+        cur = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name) and cur.id == 'torch':
+            import torch
+
+            obj = torch
+            for attr in reversed(parts):
+                obj = getattr(obj, attr)
+            return obj
+    raise ValueError(f'Unsupported argument expression: {ast.dump(node)}')
+
+
+def call_with_args_string(func: typing.Callable, args_string: str, *leading_args):
+    """Calls `func(*leading_args, <args_string>)` by parsing `args_string` safely instead of `eval`.
+
+    `args_string` is the textual argument list recorded by the tracer, e.g. `"0.0, max=6.0"`.
+    """
+    args_string = (args_string or '').strip()
+    tree = ast.parse(f'_f({args_string})', mode='eval')
+    call = tree.body
+    if not isinstance(call, ast.Call):
+        raise ValueError(f'Cannot parse argument string: {args_string!r}')
+    args = list(leading_args)
+    for a in call.args:
+        if isinstance(a, ast.Starred):
+            raise ValueError(f'Starred arguments are not supported: {args_string!r}')
+        args.append(_eval_arg_node(a))
+    kwargs = {}
+    for kw in call.keywords:
+        if kw.arg is None:
+            raise ValueError(f'`**kwargs` expansion is not supported: {args_string!r}')
+        kwargs[kw.arg] = _eval_arg_node(kw.value)
+    return func(*args, **kwargs)
 
 
 def get_logger(name: str, level: typing.Optional[str] = None) -> logging.Logger:

@@ -346,7 +346,7 @@ class DimensionChangeInfo(object):
             tensor_idx = nxt_tensor_idx.index(id(tensor))
             return f'{center.unique_name()}:output_{tensor_idx}'
         else:
-            assert False
+            raise AssertionError
 
     def build_choice_key(self, tensor):
         """Generate human-readable keys to reduce the debugging cost of complex computational graphs"""
@@ -360,7 +360,7 @@ class DimensionChangeInfo(object):
             tensor_idx = nxt_tensor_idx.index(id(tensor))
             return f'output_{tensor_idx}'
         else:
-            assert False
+            raise AssertionError
 
     def is_multi_dim_changed(self):
         dim_change_i = self.merge_i()
@@ -1071,7 +1071,7 @@ class Modifier(object):
             for tid, choice in dim_choices_i.items():
                 tensor_choices[tid] = list(choice)
         else:
-            assert False
+            raise AssertionError
 
         return tensor_choices
 
@@ -1338,7 +1338,7 @@ class SplitModifier(ReIndexModifier):
             elif args_parsed[1] == '{}':
                 return True
             else:
-                assert False
+                raise AssertionError
 
             self.node.module.args_to_string(deepcopy(self.args_parsed()))
 
@@ -1643,7 +1643,7 @@ class LinearChannelModifier(Modifier):
         elif len(dim_choice_i) == 1:
             dim = dim_choice_i[0]
         else:
-            assert False
+            raise AssertionError
 
         self.dim_changes_info.groups_i = [set([i for i in range(self.input_tensor.shape[dim])])]
         self.dim_changes_info.groups_o = [set([i for i in range(self.output_tensor.shape[dim])])]
@@ -1815,7 +1815,7 @@ class RNNChannelModifier(Modifier):
         elif len(dim_choice_i) == 1:
             dim = dim_choice_i[0]
         else:
-            assert False
+            raise AssertionError
 
         self.dim_changes_info.groups_i = [set([i for i in range(self.input_tensor.shape[dim])])]
         if self.bidirectional:
@@ -2206,7 +2206,7 @@ class RNNChannelModifier(Modifier):
 
         if len(dim_changes_o) > 0:
             log.error(f"[{self.unique_name()}] Modifying dimensions other than dim_c is temporarily not supported")
-            assert False
+            raise AssertionError
 
 
 class ConvChannelModifier(Modifier):
@@ -2824,7 +2824,7 @@ class SubGraph(object):
                                 continue
 
                             if max(center_idxes) >= len(importance[center_name]):
-                                assert False
+                                raise AssertionError
 
                             importance_ += float(sum(importance[center_name][center_idxes]))
                             center_to_center = center_to_center_all[center_name]

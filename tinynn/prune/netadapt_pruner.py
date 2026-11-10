@@ -8,7 +8,7 @@ import typing
 
 import torch
 from tinynn.graph import modifier
-from tinynn.util.util import get_logger
+from tinynn.util.util import get_logger, safe_torch_load
 from tinynn.prune import OneShotChannelPruner
 
 if sys.version_info.major == 3 and sys.version_info.minor < 7:
@@ -358,7 +358,7 @@ class NetAdaptPruner(OneShotChannelPruner):
                 self.prune_subgraph(best_sparsity)
 
                 load_path = os.path.join(self.netadapt_dir, f'iter_{self.iteration}_subgraph_{max_idx}.pth')
-                self.model.load_state_dict(torch.load(load_path, map_location='cpu'))
+                self.model.load_state_dict(safe_torch_load(load_path, map_location='cpu'))
 
                 global_sparsity = self.get_sparsity_state()
                 global_sparsity['best_flops'] = best_flops
@@ -388,7 +388,7 @@ class NetAdaptPruner(OneShotChannelPruner):
         config = self.load_config(sparsity_path)
 
         self.prune_subgraph(config)
-        self.model.load_state_dict(torch.load(weights_path, map_location='cpu'))
+        self.model.load_state_dict(safe_torch_load(weights_path, map_location='cpu'))
 
         self.iteration = config['iteration'] + 1
 

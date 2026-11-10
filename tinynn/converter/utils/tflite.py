@@ -15,7 +15,7 @@ def parse_lstm_states(model):
     elif isinstance(model, bytes):
         model = tflite.Model.GetRootAsModel(model, 0)
     elif not isinstance(model, tflite.Model):
-        assert False, f"expected type str, bytes and tflite.Model but got {type(model).__name__}"
+        raise AssertionError(f"expected type str, bytes and tflite.Model but got {type(model).__name__}")
 
     assert model.SubgraphsLength() == 1, "Only one subgraph is supported"
 

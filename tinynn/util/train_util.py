@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from .util import get_logger
+from .util import get_logger, safe_torch_load
 
 log = get_logger(__name__, 'INFO')
 
@@ -148,13 +148,13 @@ def train(
                     best_acc = acc
                     log.info(f"Best acc: {best_acc}")
                     save_path = os.path.join(work_dir, 'best_model.pth')
-                    torch.save(model, save_path)
+                    torch.save(model.state_dict(), save_path)
 
     # only validate the final model in the main process
     if main_process:
         if not qat:
             load_path = os.path.join(work_dir, 'best_model.pth')
-            model.load_state_dict(torch.load(load_path).state_dict())
+            model.load_state_dict(safe_torch_load(load_path, map_location=get_module_device(model)))
             validate_func(model, context)
 
 

@@ -128,7 +128,7 @@ def layer_error_analysis(q_model: nn.Module, dummy_input, metric: str = 'cosine'
             actual_input = list(dummy_input)
         else:
             log.error(f'Unsupported type {type(dummy_input)} for dummy input')
-            assert False
+            raise AssertionError
 
         for i in range(len(actual_input)):
             dummy_input = actual_input[i]
@@ -229,7 +229,7 @@ def graph_error_analysis(q_model: nn.Module, dummy_input, metric: str = 'cosine'
             actual_input = list(dummy_input)
         else:
             log.error(f'Unsupported type {type(dummy_input)} for dummy input')
-            assert False
+            raise AssertionError
 
         for i in range(len(actual_input)):
             dummy_input = actual_input[i]

@@ -70,7 +70,7 @@ for f, s in func_dict.items():
             assert hasattr(torch.nn.functional, name), f'{module}.{name}'
         elif module.startswith('torch._C.'):
             print(module, name, 'not recognized')
-            assert False
+            raise AssertionError
         fullname = f'{module}.{name}'
     elif qualname:
         if qualname.startswith('_VariableFunctionsClass.'):

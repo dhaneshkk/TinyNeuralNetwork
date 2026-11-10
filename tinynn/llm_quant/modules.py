@@ -49,7 +49,7 @@ def compress_int(data_tensor, bit_width, per_channel=True, per_token=False):
         elif len(data_tensor.shape) == 2:
             scales = scales[:, None]
         else:
-            assert False
+            raise AssertionError
         quantized_tensor = torch.clamp(torch.round(data_tensor.float() / scales.float()), q_min, q_max).to(torch.int8)
         scale = scales
     else:
@@ -99,7 +99,7 @@ class QLinear(nn.Module):
         input_dtype = input.dtype
         input_shape = input.shape
         if self.quant_mod == 'static':
-            assert False, f'{self.quant_mod} not supported'
+            raise AssertionError(f'{self.quant_mod} not supported')
         else:
             if self.quant_mod == 'weight4':
                 if SPEEDUP:

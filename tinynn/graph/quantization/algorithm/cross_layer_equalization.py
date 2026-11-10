@@ -15,7 +15,7 @@ from tinynn.graph.tracer import model_tracer, trace, TraceNode
 from tinynn.graph.quantization.quantizer import PostQuantizer, load_processed_ptq_rules
 from tinynn.util.util import get_logger
 from tinynn.util.bn_restore import model_restore_bn, ConvBnTrain
-from tinynn.util.util import import_from_path
+from tinynn.util.util import import_from_path, safe_torch_load
 
 log = get_logger(__name__)
 
@@ -346,7 +346,7 @@ def model_rewrite(model, dummy_input, work_dir='out') -> nn.Module:
 
         # Import the new model
         rewritten_model = import_from_path(model_ns, model_code_path, model_rewrite)()
-        rewritten_model.load_state_dict(torch.load(model_weights_path))
+        rewritten_model.load_state_dict(safe_torch_load(model_weights_path))
         os.unlink(model_weights_path)
         return rewritten_model
 

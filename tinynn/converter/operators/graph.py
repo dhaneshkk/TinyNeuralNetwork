@@ -69,7 +69,7 @@ class CommonGraph(object):
             self.iterable_map.setdefault(list_name, [])
             self.iterable_map[list_name].extend(input_names)
         else:
-            assert False, "You should specify key == 'input' or 'output'"
+            raise AssertionError("You should specify key == 'input' or 'output'")
 
     def has_nested_names(self, key: str) -> bool:
         """Whether a tensor has nested tensor (names)
@@ -414,7 +414,7 @@ class CommonGraph(object):
                         op.inputs[idx] = self.tensor_map[tensor_name]
                 self.graph.add_edge(connect_node, next_op, name=tensor_name, label=tensor_name)
             else:
-                assert False, 'replace_next_tensors where last_node.next is an output node is not supported'
+                raise AssertionError('replace_next_tensors where last_node.next is an output node is not supported')
 
             log.debug(f'NEW EDGE: {connect_node["label"]} -> {next_op["label"]} {self.tensor_map[next_tensor["name"]]}')
             log.debug(f'{next_op["label"]} {next_op["op"].inputs} {next_op["op"].outputs}')

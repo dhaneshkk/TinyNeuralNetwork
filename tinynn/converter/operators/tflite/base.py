@@ -258,7 +258,7 @@ class Tensor(object):
         elif type(tensor) in (tuple, list):
             self.tensor = np.asarray(tensor, dtype=dtype)
         else:
-            assert False, f"unrecognized tensor type {type(tensor).__name__}"
+            raise AssertionError(f"unrecognized tensor type {type(tensor).__name__}")
 
         if has_buffer:
             self.buffer = Buffer(self.tensor.tobytes())
@@ -389,7 +389,7 @@ class Model(object):
 
 def create_offset_vector(builder: flatbuffers.Builder, prop: typing.Callable, vec: typing.Iterable):
     if type(vec) not in (tuple, list):
-        assert False, "type of vec unexpected, expected: list or tuple"
+        raise AssertionError("type of vec unexpected, expected: list or tuple")
     elif type(vec) is tuple:
         vec = list(vec)
 
@@ -397,7 +397,7 @@ def create_offset_vector(builder: flatbuffers.Builder, prop: typing.Callable, ve
     cls_name = prop.__qualname__.split('.')[0]
     func_name = f'{cls_name}Start{prop_name}Vector'
     if not hasattr(tflite, func_name):
-        assert False, f"invalid prop is given, {prop.__qualname__}"
+        raise AssertionError(f"invalid prop is given, {prop.__qualname__}")
 
     start_vec_func = getattr(tflite, func_name)
     start_vec_func(builder, len(vec))
@@ -413,13 +413,13 @@ def create_offset_vector(builder: flatbuffers.Builder, prop: typing.Callable, ve
 
 def create_numpy_array(builder: flatbuffers.Builder, prop: typing.Callable, vec: typing.Iterable, dtype: str = 'int32'):
     if type(vec) not in (tuple, list, torch.Size) and type(vec).__module__ != 'numpy':
-        assert False, "type of vec unexpected, expected: list or tuple or ndarray"
+        raise AssertionError("type of vec unexpected, expected: list or tuple or ndarray")
 
     prop_name = prop.__name__
     cls_name = prop.__qualname__.split('.')[0]
     func_name = f'{cls_name}Start{prop_name}Vector'
     if not hasattr(tflite, func_name):
-        assert False, f"invalid prop is given, {prop.__qualname__}"
+        raise AssertionError(f"invalid prop is given, {prop.__qualname__}")
 
     arr = np.asarray(vec, dtype=dtype)
     return builder.CreateNumpyVector(arr)
@@ -427,26 +427,26 @@ def create_numpy_array(builder: flatbuffers.Builder, prop: typing.Callable, vec:
 
 def create_string(builder: flatbuffers.Builder, prop: typing.Callable, val: str):
     if type(val) is not str:
-        assert False, "type of val unexpected, expected: str"
+        raise AssertionError("type of val unexpected, expected: str")
 
     prop_name = prop.__name__
     cls_name = prop.__qualname__.split('.')[0]
     func_name = f'{cls_name}Add{prop_name}'
     if not hasattr(tflite, func_name):
-        assert False, f"invalid prop is given, {prop.__qualname__}"
+        raise AssertionError(f"invalid prop is given, {prop.__qualname__}")
 
     return builder.CreateString(val)
 
 
 def create_byte_array(builder: flatbuffers.Builder, prop: typing.Callable, val: typing.Union[bytes, bytearray]):
     if type(val) not in (bytearray, bytes):
-        assert False, "type of val unexpected, expected: bytes or bytearray"
+        raise AssertionError("type of val unexpected, expected: bytes or bytearray")
 
     prop_name = prop.__name__
     cls_name = prop.__qualname__.split('.')[0]
     func_name = f'{cls_name}Start{prop_name}Vector'
     if not hasattr(tflite, func_name):
-        assert False, f"invalid prop is given, {prop.__qualname__}"
+        raise AssertionError(f"invalid prop is given, {prop.__qualname__}")
 
     return builder.CreateByteVector(val)
 

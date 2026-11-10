@@ -71,7 +71,7 @@ class PrimGetAttrConverter(PrimOperatorConverter):
             v = getattr(self.input_tensors[0], name)
             self.output_tensors.append(v)
         else:
-            assert False, f"prim::GetAttr({self.output_names[0]}) needs attribute `name` with type str"
+            raise AssertionError(f"prim::GetAttr({self.output_names[0]}) needs attribute `name` with type str")
 
 
 class PrimNumToTensorConverter(PrimOperatorConverter):
@@ -132,10 +132,10 @@ class PrimConstantChunkConverter(PrimOperatorConverter):
         dim, dim_type = attrs.get('dim', (None, None))
 
         if chunks is None or chunks_type != 'i':
-            assert False, f"prim::ConstantChunk({self.output_names[0]}) needs attribute `chunks` with type int"
+            raise AssertionError(f"prim::ConstantChunk({self.output_names[0]}) needs attribute `chunks` with type int")
 
         if dim is None or dim_type != 'i':
-            assert False, f"prim::ConstantChunk({self.output_names[0]}) needs attribute `dim` with type int"
+            raise AssertionError(f"prim::ConstantChunk({self.output_names[0]}) needs attribute `dim` with type int")
 
         v = torch.chunk(self.input_tensors[0], chunks, dim)
         self.output_tensors.extend(v)

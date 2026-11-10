@@ -55,7 +55,7 @@ from tinynn.graph.tracer import (
     trace,
 )
 from tinynn.util.train_util import get_logger, get_module_device
-from tinynn.util.util import import_from_path
+from tinynn.util.util import call_with_args_string, import_from_path, safe_torch_load
 from tinynn.graph.quantization.utils import fake_quantize
 
 from . import fused_modules as fm
@@ -512,7 +512,7 @@ class QATQuantizer(object):
             else:
                 # Import the new model
                 rewritten_model = import_from_path(model_ns, model_code_path, model_name_q)()
-                rewritten_model.load_state_dict(torch.load(model_weights_path))
+                rewritten_model.load_state_dict(safe_torch_load(model_weights_path))
 
                 device = get_module_device(self.model)
                 if device is not None:
@@ -1850,7 +1850,7 @@ class QATQuantizer(object):
             args = getattr(node.module, 'args_string_no_self', '')
             if ',' in args:
                 log.error('rewrite doesn\'t support multiple args for torch.stack')
-                assert False
+                raise AssertionError
             if len(args) > 0:
                 if '=' in args:
                     k, v = args.split('=')
@@ -1930,7 +1930,7 @@ class QATQuantizer(object):
                     op_type = f'{op_kind}_scalar'
                 else:
                     log.error(f'Unknown add/mul type for {node.unique_name}, prev tensor size: {prev_tensor_size}')
-                    assert False
+                    raise AssertionError
             else:
                 # Don't check anything for other OPs.
                 # It is simply too complex for us.
@@ -1958,7 +1958,7 @@ class QATQuantizer(object):
             if node.module.func_type in ['__radd__', '__rmul__']:
                 if '=' in node.module.args_string_no_self or ', ' in node.module.args_string_no_self:
                     log.error(f'Don\'t know how to translate {node.module.args_string_no_self} for __radd__/__rmul__')
-                    assert False
+                    raise AssertionError
                 if prev_tensor_size == 1:
                     # Here we make a simple guess, if dot is in the string, then it's a floating number.
                     # Otherwise, it is an integral number.
@@ -1989,9 +1989,11 @@ class QATQuantizer(object):
         log.info(f'rewriting clamp_{{min,max}} for {[node.unique_name for node in convertible_nodes]}')
         for node in clamp_min_max_nodes:
             kw = node.module.kind[-3:]
-            _parse_args = eval(f'lambda {kw}, *args, **kwargs: {kw}')
 
-            val = eval(f'_parse_args({node.module.args_string_no_self})')
+            def _parse_args(*args, **kwargs):
+                return kwargs[kw] if kw in kwargs else args[0]
+
+            val = call_with_args_string(_parse_args, node.module.args_string_no_self)
 
             if kw != 'min' or val != 0.0:
                 continue
@@ -2028,7 +2030,7 @@ class QATQuantizer(object):
             def _parse_args(min=None, max=None, *args, **kwargs):
                 return min, max
 
-            min, max = eval(f'_parse_args({node.module.args_string_no_self})')
+            min, max = call_with_args_string(_parse_args, node.module.args_string_no_self)
 
             kind = None
             if min == 0.0:
@@ -2195,7 +2197,7 @@ class QATQuantizer(object):
                     def _parse_args(alpha=1.0, *args, **kwargs):  # noqa: F811
                         return alpha
 
-                    alpha = eval(f'_parse_args({node.module.args_string_no_self})')
+                    alpha = call_with_args_string(_parse_args, node.module.args_string_no_self)
                     if node.module.kind == 'leaky_relu':
                         new_func = klass(alpha, inplace=inplace)
                     else:
@@ -2247,7 +2249,7 @@ class QATQuantizer(object):
                     def _parse_args_dim(dim=-1, *args, **kwargs):  # noqa: F811
                         return dim
 
-                    dim = eval(f'_parse_args_dim({node.module.args_string_no_self})')
+                    dim = call_with_args_string(_parse_args_dim, node.module.args_string_no_self)
                     new_func = klass(dim)
                 else:
                     dim = None
@@ -2299,7 +2301,7 @@ class QATQuantizer(object):
         log.info(f'rewriting dropout for {[node.unique_name for node in dropout_nodes_to_rewrite]}')
         for idx, node in enumerate(dropout_nodes_to_rewrite):
             args = getattr(node.module, 'args_string_no_self', '')
-            p, _, inplace = eval(f'_dropout_args({args})')
+            p, _, inplace = call_with_args_string(_dropout_args, args)
             kind = node.module.kind
             inplace = node.module.func_type == f'{kind}_' or inplace
             dropout_cls = nn.Dropout
@@ -2337,7 +2339,7 @@ class QATQuantizer(object):
                     shared_tensors = list(set(node.prev_tensors).intersection(set(n.next_tensors)))
                     if len(shared_tensors) > 1:
                         log.error('rewrite for partially-supported ops supports with nodes with exact one input')
-                        assert False
+                        raise AssertionError
                     with override_current_trace_graph(graph):
                         trace_func = TraceFunction('torch.Tensor.contiguous', True, prefix='fuse_').parse_args(
                             shared_tensors[0]
@@ -2372,7 +2374,9 @@ class QATQuantizer(object):
                     def _avgpool_kernel_size_and_stride(kernel_size, stride=None, *args, **kwargs):
                         return kernel_size, stride
 
-                    kernel_size, stride = eval(f'_avgpool_kernel_size_and_stride({cur_module.args_string_no_self})')
+                    kernel_size, stride = call_with_args_string(
+                        _avgpool_kernel_size_and_stride, cur_module.args_string_no_self
+                    )
             else:
                 if cur_class in (nn.AvgPool1d, nn.AvgPool2d, nn.MaxPool1d, nn.MaxPool2d):
                     kernel_size = cur_module.kernel_size
@@ -3112,7 +3116,7 @@ class QATQuantizer(object):
             actual_input = list(dummy_input)
         else:
             log.error(f'Unsupported type {type(dummy_input)} for dummy input')
-            assert False
+            raise AssertionError
 
         for i in range(len(actual_input)):
             dummy_input = actual_input[i]
@@ -3225,7 +3229,7 @@ class QATQuantizer(object):
             elif type(m).__module__.startswith('torch.nn.modules'):
                 continue
             else:
-                assert False, f"unsupported type: {type(m).__name__}"
+                raise AssertionError(f"unsupported type: {type(m).__name__}")
 
         for n, m in sub_list:
             setattr(q_model, n, m)
@@ -3996,7 +4000,7 @@ class DeQuantizer(object):
 
             # Import the new model
             rewritten_model = import_from_path(model_ns, model_code_path, model_name_float)()
-            rewritten_model.load_state_dict(torch.load(model_weights_path))
+            rewritten_model.load_state_dict(safe_torch_load(model_weights_path))
 
             device = get_module_device(self.model)
             if device is not None:

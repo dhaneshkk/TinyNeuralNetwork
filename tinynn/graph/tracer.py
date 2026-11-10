@@ -8,7 +8,7 @@ import os
 import queue
 import re
 import sys
-import traceback
+import threading
 import typing
 import weakref
 import types
@@ -22,7 +22,7 @@ from torch.nn.parallel.data_parallel import DataParallel
 from torch.nn.parallel.distributed import DistributedDataParallel
 
 from tinynn.util.train_util import get_module_device
-from tinynn.util.util import get_logger, import_from_path, tensors2ndarray
+from tinynn.util.util import call_with_args_string, get_logger, import_from_path, safe_torch_load, tensors2ndarray
 from ._utils import patch_getitem, revert_getitem, patch_new, revert_new
 from . import interop  # noqa: F401
 
@@ -138,6 +138,10 @@ tracking_modules_overrided = GlobalData(False)
 
 # Lock for tracing
 lock = GlobalData(False)
+
+# Tracing patches torch globally and keeps graph state in module globals, so only one thread may
+# trace at a time. Re-entrant so nested tracer contexts on the same thread keep working.
+_TRACE_RLOCK = threading.RLock()
 handle_func_lock = GlobalData(False)
 
 # Whether the constructors get traced
@@ -482,9 +486,11 @@ class TraceFunction(object):
             if prefix is None:
                 if original:
                     tensor_names = [
-                        (o_name if o_name.startswith('self.') else f'self.{o_name}')
-                        if u_name.startswith('self.')
-                        else u_name
+                        (
+                            (o_name if o_name.startswith('self.') else f'self.{o_name}')
+                            if u_name.startswith('self.')
+                            else u_name
+                        )
                         for u_name, o_name in zip(self.tensor_names, self.original_tensor_names)
                     ]
                 else:
@@ -526,14 +532,14 @@ class TraceFunction(object):
 
             if not isinstance(args[0], (tuple, list)):
                 log.error('Only tuple or list is accepted here')
-                assert False
+                raise AssertionError
 
             arg_len = len(args[0])
 
         expected_len = len(self.tensor_names)
         if arg_len != expected_len:
             log.error(f'Wrong number of input tensors, expected: {expected_len}, but got {arg_len}')
-            assert False
+            raise AssertionError
 
         expr = self.extra_expr('args[0]')
         return eval(expr)
@@ -636,7 +642,7 @@ class TraceFunction(object):
                     new_arg.append('{}')
                 else:
                     log.error(f"unsupported type {type(a)} while generating arg for func {self.full_name}")
-                    assert False
+                    raise AssertionError
 
             return new_arg
 
@@ -650,7 +656,7 @@ class TraceFunction(object):
             kw_keys, kw_vals = zip(*kw_items)
             kw_val_strs = _parse_args(kw_vals)
 
-            for (k, v) in zip(kw_keys, kw_val_strs):
+            for k, v in zip(kw_keys, kw_val_strs):
                 if type(v) is list:
                     v_str = self._flatten_list(v)
                     arg_str.append(f"{k}={v_str}")
@@ -687,7 +693,7 @@ class TraceFunction(object):
             self.update_args_string()
         except Exception:
             log.error(f"Error generating argument string for function {self.full_name}")
-            assert False
+            raise AssertionError
 
         return self
 
@@ -736,8 +742,10 @@ def no_catch():
         yield False
     else:
         lock(True)
-        yield True
-        lock(False)
+        try:
+            yield True
+        finally:
+            lock(False)
 
 
 @contextlib.contextmanager
@@ -747,8 +755,10 @@ def no_catch_handle_func():
         yield False
     else:
         handle_func_lock(True)
-        yield True
-        handle_func_lock(False)
+        try:
+            yield True
+        finally:
+            handle_func_lock(False)
 
 
 def args_as_string(args, kwargs):
@@ -1300,8 +1310,10 @@ def patch(object, name, gen, *args, **kwargs):
 
     pre_patched_value = getattr(object, name)
     setattr(object, name, gen(pre_patched_value, *args, **kwargs))
-    yield object
-    setattr(object, name, pre_patched_value)
+    try:
+        yield object
+    finally:
+        setattr(object, name, pre_patched_value)
 
 
 @contextlib.contextmanager
@@ -1321,15 +1333,17 @@ def patch_modules(objects, names, gens):
             else:
                 setattr(obj, name, generated_wrapper_modules[key])
 
-    yield objects
-    for obj in objects:
-        for name in names:
-            key = qualified_name(obj, name, short=True)
-            pre_patched_value = pre_patched_values[key]
-            if key == 'torch.Size.__new__':
-                revert_new(obj, pre_patched_value)
-            else:
-                setattr(obj, name, pre_patched_value)
+    try:
+        yield objects
+    finally:
+        for obj in objects:
+            for name in names:
+                key = qualified_name(obj, name, short=True)
+                pre_patched_value = pre_patched_values[key]
+                if key == 'torch.Size.__new__':
+                    revert_new(obj, pre_patched_value)
+                else:
+                    setattr(obj, name, pre_patched_value)
 
 
 @contextlib.contextmanager
@@ -1360,16 +1374,18 @@ def patch_funcs(object_dicts, gens):
                             key, gen(pre_patched_value_dict[key], key, hasattr(obj, '__module__'))
                         )
                         setattr(obj, name, generated_wrapper_funcs[key])
-    yield object_dict
-    for object_dict, gen in zip(object_dicts, gens):
-        for obj, names in object_dict.items():
-            for name in names:
-                key = qualified_name(obj, name)
-                if key == 'torch.Tensor.__getitem__':
+    try:
+        yield object_dict
+    finally:
+        for object_dict, gen in zip(object_dicts, gens):
+            for obj, names in object_dict.items():
+                for name in names:
                     key = qualified_name(obj, name)
-                    revert_getitem(obj, pre_patched_value_dict[key])
-                else:
-                    setattr(obj, name, pre_patched_value_dict[key])
+                    if key == 'torch.Tensor.__getitem__':
+                        key = qualified_name(obj, name)
+                        revert_getitem(obj, pre_patched_value_dict[key])
+                    else:
+                        setattr(obj, name, pre_patched_value_dict[key])
 
 
 def get_constructor_args(actual_class_type):
@@ -1396,6 +1412,7 @@ def gen_module_constrctor_line(module, mod_cache=None):
     }
 
     def _skip_ignored_args(name, *args, **kwargs):
+        args = list(args)
         iargs = ignored_args[name]
         for arg in iargs:
             if isinstance(arg, int):
@@ -1465,7 +1482,7 @@ def gen_module_constrctor_line(module, mod_cache=None):
             head = result[: start_pos + 1]
             tail = result[end_pos:]
             mid = result[start_pos + 1 : end_pos]
-            result = head + eval(f'_skip_ignored_args("{name}", {mid})') + tail
+            result = head + call_with_args_string(_skip_ignored_args, mid, name) + tail
 
     return result, mod_cache
 
@@ -1744,22 +1761,26 @@ def hook_modules(module):
     hooks.append(module.register_forward_pre_hook(_model_pre_tracer))
     hooks.append(module.register_forward_hook(_model_tracer))
 
-    yield module
-
-    for hook in hooks:
-        hook.remove()
+    try:
+        yield module
+    finally:
+        for hook in hooks:
+            hook.remove()
 
 
 @contextlib.contextmanager
 def tracer_context():
-    """Basic context manager for tracing"""
-    yield True
-    lock(False)
-    module_constructor_traced.clear()
-    module_constructor_lines.clear()
-    module_constructor_weakrefs.clear()
-    original_values_for_tracked_objects.clear()
-    skip_modules.clear()
+    """Basic context manager for tracing (serialised across threads, state cleared even on error)"""
+    with _TRACE_RLOCK:
+        try:
+            yield True
+        finally:
+            lock(False)
+            module_constructor_traced.clear()
+            module_constructor_lines.clear()
+            module_constructor_weakrefs.clear()
+            original_values_for_tracked_objects.clear()
+            skip_modules.clear()
 
 
 @contextlib.contextmanager
@@ -1773,8 +1794,10 @@ def model_constructor_tracer():
 def ignore_mod_param_update_warning():
     if not mod_param_update_warning_ignore():
         mod_param_update_warning_ignore(True)
-        yield True
-        mod_param_update_warning_ignore(False)
+        try:
+            yield True
+        finally:
+            mod_param_update_warning_ignore(False)
     else:
         yield False
 
@@ -1792,18 +1815,24 @@ def construct_trace_graph(
     module, dummy_input: torch.Tensor, eliminate_dead_graph: bool, patch_torch_size: bool
 ) -> 'TraceGraph':
     """Simple context manager for creating a new TraceGraph"""
-    current_graph(TraceGraph(module, dummy_input, eliminate_dead_graph, patch_torch_size))
-    yield current_graph.get_value()
-    current_graph(None)
+    with _TRACE_RLOCK:
+        current_graph(TraceGraph(module, dummy_input, eliminate_dead_graph, patch_torch_size))
+        try:
+            yield current_graph.get_value()
+        finally:
+            current_graph(None)
 
 
 @contextlib.contextmanager
 def override_current_trace_graph(new_graph: 'TraceGraph') -> 'TraceGraph':
     """Simple context manager for creating a new TraceGraph"""
-    old_graph = current_graph.get_value()
-    current_graph(new_graph)
-    yield current_graph.get_value()
-    current_graph(old_graph)
+    with _TRACE_RLOCK:
+        old_graph = current_graph.get_value()
+        current_graph(new_graph)
+        try:
+            yield current_graph.get_value()
+        finally:
+            current_graph(old_graph)
 
 
 @contextlib.contextmanager
@@ -1887,7 +1916,7 @@ class TraceGraph(object):
             log.error(
                 'You are tracing a parallel module, which is unsupported. Please pass in a raw model using `.module`.'
             )
-            assert False
+            raise AssertionError
         else:
             self.module = module
 
@@ -2028,7 +2057,7 @@ class TraceGraph(object):
                 actual_input = list(self.dummy_input)
             else:
                 log.error(f'Unsupported type {type(self.dummy_input)} for dummy input')
-                assert False
+                raise AssertionError
 
             for i in range(len(actual_input)):
                 dummy_input = actual_input[i]
@@ -2246,10 +2275,11 @@ class TraceGraph(object):
     @contextlib.contextmanager
     def __numbering_context(self):
         """A simple context manager for numbering nodes"""
-        yield True
-
-        self.global_functions.clear()
-        self.global_nodes.clear()
+        try:
+            yield True
+        finally:
+            self.global_functions.clear()
+            self.global_nodes.clear()
 
     def __gen_init_code(self) -> str:
         """Generates the code for the init function for a `nn.Module`"""
@@ -2454,7 +2484,9 @@ class TraceGraph(object):
 
         if output_weight_path:
             torch.save(dummy_model.state_dict(), output_weight_path)
-            output_weight_path_str = output_weight_path.replace('\\', '\\\\')
+            weights_only_arg = (
+                ', weights_only=True' if 'weights_only' in inspect.signature(torch.load).parameters else ''
+            )
 
         init_block = self.__gen_init_code()
         forward_block = self.__gen_forward_code()
@@ -2466,9 +2498,11 @@ class TraceGraph(object):
             "init_block": init_block,
             "forward_block": forward_block,
             "name_block": model_name,
-            "load_weight_block": ""
-            if output_weight_path is None
-            else f"    model.load_state_dict(torch.load('{output_weight_path_str}'))",
+            "load_weight_block": (
+                ""
+                if output_weight_path is None
+                else f"    model.load_state_dict(torch.load({output_weight_path!r}{weights_only_arg}))"
+            ),
             "input_block": input_block,
             "input_names": ", ".join([f"dummy_input_{i}" for i in range(len(self.input_nodes))]),
         }
@@ -2492,7 +2526,7 @@ class TraceGraph(object):
                     new_module = import_from_path(f'tracer_check.{model_name}', output_script_path, model_name)()
                     new_module.eval()
                     if output_weight_path:
-                        new_module.load_state_dict(torch.load(output_weight_path))
+                        new_module.load_state_dict(safe_torch_load(output_weight_path))
 
                     new_outputs = tensors2ndarray(new_module(*self.dummy_input))
 
@@ -2616,7 +2650,7 @@ class TraceGraph(object):
                 self.forward_nodes.insert(0, new_node)
             elif node in self.output_nodes:
                 log.error('You cannot insert a node after output nodes')
-                assert False
+                raise AssertionError
             else:
                 idx = self.forward_nodes.index(node)
                 self.forward_nodes.insert(idx + 1, new_node)
@@ -2726,7 +2760,7 @@ class TraceGraph(object):
 
             if prev_node not in next_node.prev_nodes or next_node not in prev_node.next_nodes:
                 log.error('You cannot insert a node between two nodes that is not connected')
-                assert False
+                raise AssertionError
 
             idx = self.forward_nodes.index(next_node)
             self.forward_nodes.insert(idx, new_node)
@@ -2844,11 +2878,11 @@ class TraceGraph(object):
             else:
                 if not node.rev_index:
                     log.error('You can only insert nodes with a list modules when node.rev_index=True')
-                    assert False
+                    raise AssertionError
 
                 if len(module) != len(node.prev_nodes):
                     log.error(f'The number of the modules provided is wrong, expected: {len(node.prev_nodes)}')
-                    assert False
+                    raise AssertionError
 
                 modules = module
                 rev_mode = True
@@ -2862,7 +2896,7 @@ class TraceGraph(object):
 
         if node in self.input_nodes or node in self.constant_nodes:
             log.error('You cannot insert a node before input/constant nodes')
-            assert False
+            raise AssertionError
         elif node in self.output_nodes:
             for new_node in new_nodes:
                 self.forward_nodes.append(new_node)
@@ -2991,7 +3025,7 @@ class TraceGraph(object):
                 elif (pn_name, pn_idx) in tensors_map:
                     prev_tensors.append(tensors_map[(pn_name, pn_idx)])
                 else:
-                    assert False, f"({pn_name}, {pn_idx}) is not found in tensor dict"
+                    raise AssertionError(f"({pn_name}, {pn_idx}) is not found in tensor dict")
 
             node.prev_tensors = prev_tensors
 
@@ -3138,22 +3172,22 @@ class TraceGraph(object):
         """Remove a node from the computation graph"""
         if node not in self.forward_nodes:
             log.error('Only forward nodes can be removed')
-            assert False
+            raise AssertionError
 
         if len(node.prev_nodes) != 1:
             log.error('You cannot remove a node with multiple input nodes')
-            assert False
+            raise AssertionError
 
         if len(node.prev_tensors) != len(node.next_tensors):
             log.error('You cannot remove a node in which the size of input tensors and the output tensors is different')
-            assert False
+            raise AssertionError
 
         for idx, (prev_tensor, next_tensor) in enumerate(zip(node.prev_tensors, node.next_tensors)):
             if prev_tensor.shape != next_tensor.shape:
                 log.error(f'The shape of the input/output at index {idx} mismatches')
                 log.error(f'The shape of the input tensor is {prev_tensor.shape}')
                 log.error(f'The shape of the output tensor is {next_tensor.shape}')
-                assert False
+                raise AssertionError
 
         prev_node = node.prev_nodes[0]
         next_nodes = node.next_nodes
@@ -3168,7 +3202,7 @@ class TraceGraph(object):
             prev_node.next_nodes.remove(node)
         else:
             log.error('Current node is not in the next nodes of the previous node')
-            assert False
+            raise AssertionError
         prev_node.next_nodes.extend(next_nodes)
 
         # Deal with next nodes
@@ -3307,19 +3341,21 @@ def patch_helper(
     if wrap_tracking_modules:
         tracking_module_manager = patch_modules(tracking_modules, '__new__', new_init_tracking_gen)
         tracking_module_manager.__enter__()
-    yield True
-    if wrap_modules:
-        module_manager.__exit__(None, None, None)
-        modules_overrided(False)
-    if wrap_funcs:
-        func_manager.__exit__(None, None, None)
-        funcs_overrided(False)
-    if wrap_creation_funcs:
-        creation_func_manager.__exit__(None, None, None)
-        creation_funcs_overrided(False)
-    if wrap_tracking_modules:
-        tracking_module_manager.__exit__(None, None, None)
-        tracking_modules_overrided(False)
+    try:
+        yield True
+    finally:
+        if wrap_modules:
+            module_manager.__exit__(None, None, None)
+            modules_overrided(False)
+        if wrap_funcs:
+            func_manager.__exit__(None, None, None)
+            funcs_overrided(False)
+        if wrap_creation_funcs:
+            creation_func_manager.__exit__(None, None, None)
+            creation_funcs_overrided(False)
+        if wrap_tracking_modules:
+            tracking_module_manager.__exit__(None, None, None)
+            tracking_modules_overrided(False)
 
 
 def check_types(values: typing.Iterable) -> bool:
@@ -3381,15 +3417,15 @@ def trace(
     patch_torch_size: bool = False,
 ) -> TraceGraph:
     """main function for tracing"""
-    try:
-        with construct_trace_graph(module, dummy_input, eliminate_dead_graph, patch_torch_size) as new_graph:
+    with construct_trace_graph(module, dummy_input, eliminate_dead_graph, patch_torch_size) as new_graph:
+        try:
             new_graph.init()
             return new_graph
-    except Exception:
-        traceback.print_exc()
-        if current_graph() is not None:
-            log.error(f'inputs: {[n.unique_name for n in current_graph().input_nodes]}')
-            log.error(f'forwards: {[n.unique_name for n in current_graph().forward_nodes]}')
-            log.error(f'outputs: {[n.unique_name for n in current_graph().output_nodes]}')
-            log.error(f'constants: {[n.unique_name for n in current_graph().constant_nodes]}')
-        quit()
+        except Exception:
+            # Log the partial graph for debugging, then propagate (previously `quit()` killed the interpreter)
+            log.error('Tracing failed; partial graph follows')
+            log.error(f'inputs: {[n.unique_name for n in new_graph.input_nodes]}')
+            log.error(f'forwards: {[n.unique_name for n in new_graph.forward_nodes]}')
+            log.error(f'outputs: {[n.unique_name for n in new_graph.output_nodes]}')
+            log.error(f'constants: {[n.unique_name for n in new_graph.constant_nodes]}')
+            raise

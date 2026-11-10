@@ -55,7 +55,7 @@ class TransformableOperator(BaseOperator):
             nhwc2nchw_perm = np.array([0, 4, 1, 2, 3], dtype='int32')
             nchw2nhwc_perm = np.array([0, 2, 3, 4, 1], dtype='int32')
         else:
-            assert False, f'Don\'t know how to wrap tranposes for {orig_input.tensor.ndim}d tensors'
+            raise AssertionError(f'Don\'t know how to wrap tranposes for {orig_input.tensor.ndim}d tensors')
 
         nhwc2nchw_perm_tensor = self.create_attr_tensor(nhwc2nchw_perm)
         nchw2nhwc_perm_tensor = self.create_attr_tensor(nchw2nhwc_perm)
@@ -248,7 +248,7 @@ class GenericConvOperator(TransformableOperator):
 
             weight_tensor = self.inputs[1]
         elif weight_dim not in (4, 5):
-            assert False, "Only Conv[Transpose]1d/2d/3d is supported"
+            raise AssertionError("Only Conv[Transpose]1d/2d/3d is supported")
 
         if weight_tensor.shape[1] == 1 and weight_tensor.shape[0] == self.groups:
             if weight_dim in (3, 4):
@@ -264,7 +264,7 @@ class GenericConvOperator(TransformableOperator):
                     padding=tflite.Padding.VALID,
                 )
             else:
-                assert False, "Only DepthwiseConv1d/2d is supported"
+                raise AssertionError("Only DepthwiseConv1d/2d is supported")
         else:
             if input_tensor.shape[1] != weight_tensor.shape[1]:
                 warnings.warn(
@@ -522,7 +522,7 @@ class GenericTransposeConvOperator(TransformableOperator):
 
             weight_tensor = self.inputs[1]
         elif weight_dim not in (4, 5):
-            assert False, "Only Conv[Transpose]1d/2d/3d is supported"
+            raise AssertionError("Only Conv[Transpose]1d/2d/3d is supported")
 
         if output_tensor.shape[1] != weight_tensor.shape[1]:
             warnings.warn(
